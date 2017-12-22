@@ -11,7 +11,7 @@ type Bar struct {
 
 type foobar struct {
 	bar []Bar
-	m   map[foo]foo
+	m   map[foo]map[foo]int
 }
 
 type foo struct {
@@ -27,6 +27,10 @@ type S struct {
 	f6  [2]int
 	f7  *int
 	Foo foobar
+	m2  map[int]*int
+	m3  map[int][]foo
+	m4  map[int]foo
+	m5  map[int][2]*foo
 }
 
 // This test is simple but effective. It could be prettier or more
@@ -51,12 +55,27 @@ func TestGen(t *testing.T) {
 		},
 		f6: [2]int{1, 1},
 		f7: &five,
+		// The following maps are a bit harder to think about the
+		// result of merging...
 		Foo: foobar{
 			bar: []Bar{Bar{Baz: make(chan int)}},
-			m: map[foo]foo{
-				foo{2, 2}: {8, 8},
-				foo{3, 3}: {9, 9},
+			m: map[foo]map[foo]int{
+				foo{2, 2}: map[foo]int{foo{8, 8}: 1},
+				foo{3, 3}: map[foo]int{foo{9, 9}: 2},
 			},
+		},
+		m2: map[int]*int{
+			5: func() *int { a := 5; return &a }(),
+		},
+		m3: map[int][]foo{
+			1: []foo{foo{2, 2}, foo{3, 3}},
+			2: []foo{foo{4, 4}},
+		},
+		m4: map[int]foo{
+			1: foo{2, 2},
+		},
+		m5: map[int][2]*foo{
+			1: [2]*foo{&foo{1, 2}, &foo{3, 4}},
 		},
 	}
 
@@ -72,10 +91,24 @@ func TestGen(t *testing.T) {
 		f6: [2]int{2, 2},
 		f7: &six,
 		Foo: foobar{
-			m: map[foo]foo{
-				foo{3, 3}: {10, 10},
-				foo{4, 4}: {16, 16},
+			m: map[foo]map[foo]int{
+				foo{3, 3}: map[foo]int{foo{9, 9}: 9},
+				foo{4, 4}: map[foo]int{foo{16, 16}: 4},
 			},
+		},
+		m2: map[int]*int{
+			5: func() *int { a := 6; return &a }(),
+			7: func() *int { a := 7; return &a }(),
+		},
+		m3: map[int][]foo{
+			1: []foo{foo{5, 5}},
+		},
+		m4: map[int]foo{
+			1: foo{2, 2},
+			2: foo{3, 3},
+		},
+		m5: map[int][2]*foo{
+			1: [2]*foo{&foo{1, 2}, &foo{3, 4}},
 		},
 	}
 
@@ -103,11 +136,26 @@ func TestGen(t *testing.T) {
 		f7: &eleven,
 		Foo: foobar{
 			bar: sl.Foo.bar,
-			m: map[foo]foo{
-				foo{2, 2}: {8, 8},
-				foo{3, 3}: {19, 19},
-				foo{4, 4}: {16, 16},
+			m: map[foo]map[foo]int{
+				foo{2, 2}: map[foo]int{foo{8, 8}: 1},
+				foo{3, 3}: map[foo]int{foo{9, 9}: 11},
+				foo{4, 4}: map[foo]int{foo{16, 16}: 4},
 			},
+		},
+		m2: map[int]*int{
+			5: func() *int { a := 11; return &a }(),
+			7: func() *int { a := 7; return &a }(),
+		},
+		m3: map[int][]foo{
+			1: []foo{foo{7, 7}, foo{3, 3}},
+			2: []foo{foo{4, 4}},
+		},
+		m4: map[int]foo{
+			1: foo{4, 4},
+			2: foo{3, 3},
+		},
+		m5: map[int][2]*foo{
+			1: [2]*foo{&foo{2, 4}, &foo{6, 8}},
 		},
 	}
 
