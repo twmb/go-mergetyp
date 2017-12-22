@@ -7,7 +7,7 @@ import (
 	"strings"
 	"unsafe"
 
-	"github.com/twmb/valiface"
+	"github.com/twmb/vali"
 )
 
 // This file contains the logic to recursively generate merge functions. We
@@ -95,7 +95,9 @@ func gen(v reflect.Value, useMap bool, skips ...string) (mergeF, error) {
 
 	// We do not attempt to optimize what is behind a pointer.
 	case reflect.Ptr:
-		f, err := gen(reflect.Indirect(v), useMap, skips...)
+		et := v.Type().Elem()
+		ez := reflect.Zero(et)
+		f, err := gen(ez, useMap, skips...)
 		if err != nil {
 			return nil, err
 		}
@@ -127,10 +129,25 @@ func gen(v reflect.Value, useMap bool, skips ...string) (mergeF, error) {
 // accessing.
 func genMap(v reflect.Value, useMap bool, skips ...string) (mergeF, error) {
 	// First, we generate the merge function for the map values.
-	et := reflect.Zero(v.Type().Elem())
-	f, err := gen(et, useMap, skips...)
+	et := v.Type().Elem()
+
+	ez := reflect.Zero(et)
+	f, err := gen(ez, useMap, skips...)
 	if err != nil {
 		return nil, err
+	}
+
+	// The function we calculate for merging is based off a pointer to the
+	// value. If the map's value _is_ a pointer, we do not need to take its
+	// address before calling our closure. If the value is not a pointer,
+	// we do need to take the address.
+	//
+	// Maps _are_ pointers, and pointers are also obviously pointers.
+	// Everything else is a struct or a primitive.
+	var valNeedsIndir bool
+	etk := et.Kind()
+	if etk == reflect.Map || etk == reflect.Ptr {
+		valNeedsIndir = true
 	}
 
 	// For maps, there is no way to actually set keys with unsafe.Pointers,
@@ -142,7 +159,7 @@ func genMap(v reflect.Value, useMap bool, skips ...string) (mergeF, error) {
 	// To get around that, we will unsafely reach into a reflect.Value
 	// directly and create an interface{}. With that, we can pull out
 	// the value's type and recreate interfaces for reflect.ValueOf later.
-	i := valiface.Interface(v)
+	i := vali.Interface(v)
 	iw := (*ifaceWords)(unsafe.Pointer(&i))
 	it := iw.typ
 
@@ -162,6 +179,7 @@ func genMap(v reflect.Value, useMap bool, skips ...string) (mergeF, error) {
 		liw := (*ifaceWords)(unsafe.Pointer(&li))
 		liw.data = *(*unsafe.Pointer)(l)
 		liw.typ = it
+
 		riw := (*ifaceWords)(unsafe.Pointer(&ri))
 		riw.data = *(*unsafe.Pointer)(r)
 		riw.typ = it
@@ -185,15 +203,19 @@ func genMap(v reflect.Value, useMap bool, skips ...string) (mergeF, error) {
 			// If left's map value does exist, we have to merge it
 			// with right's value. Our merge function works on
 			// unsafe.Pointers, so we have to again use the unsafe
-			// valiface.Interface to get an interface{} and then
+			// vali.Interface to get an interface{} and then
 			// reach into the interface's data.
 			rkv := rv.MapIndex(rk)
-			lkvi := valiface.Interface(lkv)
-			rkvi := valiface.Interface(rkv)
+			lkvi := vali.Interface(lkv)
+			rkvi := vali.Interface(rkv)
 
 			lkviw := (*ifaceWords)(unsafe.Pointer(&lkvi))
 			rkviw := (*ifaceWords)(unsafe.Pointer(&rkvi))
-			f(lkviw.data, rkviw.data)
+			if valNeedsIndir {
+				f(unsafe.Pointer(&lkviw.data), unsafe.Pointer(&rkviw.data))
+			} else {
+				f(lkviw.data, rkviw.data)
+			}
 
 			// Now that the value is merged, we can set left's
 			// value to the new value.
