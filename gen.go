@@ -48,11 +48,6 @@ func gen(v reflect.Value, useMap bool, skips ...string) (mergeF, error) {
 		return nil, errors.New("unable to merge unsafe pointers (unable to determine the type)")
 	case reflect.Invalid:
 		return nil, errors.New("unable to merge an invalid type")
-	case reflect.Map:
-		if !useMap {
-			return nil, errors.New("unable to merge maps: use WithSlowerMapsUnsafely if it is absolutely necessary to merge maps")
-		}
-		return genMap(v, useMap, skips...)
 
 	// The primitive cases below are only necessary on native types or
 	// behind reflect.Ptr.
@@ -118,6 +113,12 @@ func gen(v reflect.Value, useMap bool, skips ...string) (mergeF, error) {
 
 	case reflect.Struct:
 		return genStruct(v, useMap, skips...)
+
+	case reflect.Map:
+		if !useMap {
+			return nil, errors.New("unable to merge maps: use WithSlowerMapsUnsafely if it is absolutely necessary to merge maps")
+		}
+		return genMap(v, useMap, skips...)
 
 	default:
 		panic("this switch statement should be comprehensive?")
@@ -668,3 +669,5 @@ func genStruct(v reflect.Value, useMap bool, skips ...string) (mergeF, error) {
 		}
 	}, nil
 }
+
+// TODO recursive types

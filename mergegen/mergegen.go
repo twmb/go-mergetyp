@@ -10,13 +10,6 @@ import (
 	"time"
 )
 
-// 1) package path
-// 2) type
-
-// package name, package path
-
-// flag for output filename
-
 var (
 	pkgPath = flag.String("pkg-path", "", "path used in import statements for the package we are generating in")
 	pkgName = flag.String("pkg-name", "", "package name for the package we are generating in")
