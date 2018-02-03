@@ -18,6 +18,11 @@ type foo struct {
 	o, t int
 }
 
+type recursive struct {
+	i    int
+	next *recursive
+}
+
 type S struct {
 	F1  uint64
 	f2  float32
@@ -31,6 +36,7 @@ type S struct {
 	m3  map[int][]foo
 	m4  map[int]foo
 	m5  map[int][2]*foo
+	r1  recursive
 }
 
 // This test is simple but effective. It could be prettier or more
@@ -77,6 +83,7 @@ func TestGen(t *testing.T) {
 		m5: map[int][2]*foo{
 			1: [2]*foo{&foo{1, 2}, &foo{3, 4}},
 		},
+		r1: recursive{1, &recursive{1, &recursive{2, nil}}},
 	}
 
 	six := 6
@@ -110,6 +117,7 @@ func TestGen(t *testing.T) {
 		m5: map[int][2]*foo{
 			1: [2]*foo{&foo{1, 2}, &foo{3, 4}},
 		},
+		r1: recursive{2, &recursive{3, nil}},
 	}
 
 	f, err := Gen(&sl,
@@ -157,6 +165,7 @@ func TestGen(t *testing.T) {
 		m5: map[int][2]*foo{
 			1: [2]*foo{&foo{2, 4}, &foo{6, 8}},
 		},
+		r1: recursive{3, &recursive{4, &recursive{2, nil}}},
 	}
 
 	if !reflect.DeepEqual(sl, exp) {

@@ -14,6 +14,12 @@ import (
 // special case primitive types at every level to avoid wrapping simple
 // additions with a closure.
 
+type generator struct {
+	structFs map[string]*mergeF
+	useMap   bool
+	skips    []string
+}
+
 type mergeF = func(unsafe.Pointer, unsafe.Pointer)
 
 func fieldByOffset(u unsafe.Pointer, o uintptr) unsafe.Pointer {
@@ -22,8 +28,8 @@ func fieldByOffset(u unsafe.Pointer, o uintptr) unsafe.Pointer {
 
 // gen is the entry point for all recursion; it generates a closure to merge
 // an arbitrary value (with some exceptions that return errors).
-func gen(v reflect.Value, useMap bool, skips ...string) (mergeF, error) {
-	if len(skips) > 0 {
+func (g *generator) gen(v reflect.Value) (mergeF, error) {
+	if len(g.skips) > 0 {
 		switch v.Kind() {
 		// We can only contain skips on structs or types that may
 		// contain structs.
@@ -48,11 +54,6 @@ func gen(v reflect.Value, useMap bool, skips ...string) (mergeF, error) {
 		return nil, errors.New("unable to merge unsafe pointers (unable to determine the type)")
 	case reflect.Invalid:
 		return nil, errors.New("unable to merge an invalid type")
-	case reflect.Map:
-		if !useMap {
-			return nil, errors.New("unable to merge maps: use WithSlowerMapsUnsafely if it is absolutely necessary to merge maps")
-		}
-		return genMap(v, useMap, skips...)
 
 	// The primitive cases below are only necessary on native types or
 	// behind reflect.Ptr.
@@ -97,27 +98,67 @@ func gen(v reflect.Value, useMap bool, skips ...string) (mergeF, error) {
 	case reflect.Ptr:
 		et := v.Type().Elem()
 		ez := reflect.Zero(et)
-		f, err := gen(ez, useMap, skips...)
+		f, err := g.gen(ez)
 		if err != nil {
 			return nil, err
 		}
 		if f == nil {
 			return nil, nil
 		}
+		// If either side of what the pointer points to is nil, our
+		// job is easy and we should not recurse.
 		return func(l, r unsafe.Pointer) {
-			il := *(*unsafe.Pointer)(l)
-			ir := *(*unsafe.Pointer)(r)
+			pl := (*unsafe.Pointer)(l)
+			pr := (*unsafe.Pointer)(r)
+			il := *pl
+			ir := *pr
+			if il == nil {
+				*pl = ir
+				*pr = nil
+				return
+			}
+			if ir == nil {
+				return
+			}
 			f(il, ir)
 		}, nil
 
 	case reflect.Array:
-		return genArray(v, useMap, skips...)
+		return g.genArray(v)
 
 	case reflect.Slice:
-		return genSlice(v, useMap, skips...)
+		return g.genSlice(v)
 
 	case reflect.Struct:
-		return genStruct(v, useMap, skips...)
+		// We may skip recursive struct fields selectively, so we have
+		// to recursive until we will not skip recusrive fields.
+		if len(g.skips) > 0 {
+			return g.genStruct(v)
+		}
+
+		// For recursive structs, we save a pointer to a function that
+		// we will fill in when we return up.
+		typ := v.Type()
+		name := typ.PkgPath() + "." + typ.Name()
+		pf, exists := g.structFs[name]
+		if exists {
+			return func(l, r unsafe.Pointer) { (*pf)(l, r) }, nil
+		}
+
+		pf = new(mergeF)
+		g.structFs[name] = pf
+		f, err := g.genStruct(v)
+		if err != nil {
+			return nil, err
+		}
+		*pf = f
+		return f, nil
+
+	case reflect.Map:
+		if !g.useMap {
+			return nil, errors.New("unable to merge maps: use WithSlowerMapsUnsafely if it is absolutely necessary to merge maps")
+		}
+		return g.genMap(v)
 
 	default:
 		panic("this switch statement should be comprehensive?")
@@ -127,12 +168,12 @@ func gen(v reflect.Value, useMap bool, skips ...string) (mergeF, error) {
 // genMap generates the closure to merge an map. This is the most unsafe
 // function; we have to do a bunch of trickery with values we should not be
 // accessing.
-func genMap(v reflect.Value, useMap bool, skips ...string) (mergeF, error) {
+func (g *generator) genMap(v reflect.Value) (mergeF, error) {
 	// First, we generate the merge function for the map values.
 	et := v.Type().Elem()
 
 	ez := reflect.Zero(et)
-	f, err := gen(ez, useMap, skips...)
+	f, err := g.gen(ez)
 	if err != nil {
 		return nil, err
 	}
@@ -176,6 +217,9 @@ func genMap(v reflect.Value, useMap bool, skips ...string) (mergeF, error) {
 		// Go maps _are_ pointers, so we have a pointer to a pointer
 		// right now. We un-pointer l and r to setup the interface
 		// correctly.
+		//
+		// We fill in the type last so that the GC does not observe a
+		// partially built value.
 		liw := (*ifaceWords)(unsafe.Pointer(&li))
 		liw.data = *(*unsafe.Pointer)(l)
 		liw.typ = it
@@ -225,7 +269,7 @@ func genMap(v reflect.Value, useMap bool, skips ...string) (mergeF, error) {
 }
 
 // genArray generates the closure to merge an array.
-func genArray(v reflect.Value, useMap bool, skips ...string) (mergeF, error) {
+func (g *generator) genArray(v reflect.Value) (mergeF, error) {
 	len := uintptr(v.Len())
 	et := v.Type().Elem()
 	size := et.Size()
@@ -330,7 +374,7 @@ func genArray(v reflect.Value, useMap bool, skips ...string) (mergeF, error) {
 	// Our default cases is recursion, per usual.
 	default:
 		z := reflect.Zero(et)
-		f, err := gen(z, useMap, skips...)
+		f, err := g.gen(z)
 		if err != nil {
 			return nil, err
 		}
@@ -346,7 +390,7 @@ func genArray(v reflect.Value, useMap bool, skips ...string) (mergeF, error) {
 }
 
 // genSlice generates the closure to merge a slice.
-func genSlice(v reflect.Value, useMap bool, skips ...string) (mergeF, error) {
+func (g *generator) genSlice(v reflect.Value) (mergeF, error) {
 	et := v.Type().Elem()
 	size := et.Size()
 
@@ -480,7 +524,7 @@ func genSlice(v reflect.Value, useMap bool, skips ...string) (mergeF, error) {
 
 	default:
 		z := reflect.Zero(et)
-		f, err := gen(z, useMap, skips...)
+		f, err := g.gen(z)
 		if err != nil {
 			return nil, err
 		}
@@ -498,7 +542,7 @@ func genSlice(v reflect.Value, useMap bool, skips ...string) (mergeF, error) {
 }
 
 // genStruct generates a closure to merge a struct.
-func genStruct(v reflect.Value, useMap bool, skips ...string) (mergeF, error) {
+func (g *generator) genStruct(v reflect.Value) (mergeF, error) {
 	// We actually care about skips in structs!
 	//
 	// For all skips that do not have `>`, we require the field to exist,
@@ -510,7 +554,7 @@ func genStruct(v reflect.Value, useMap bool, skips ...string) (mergeF, error) {
 	skipMyLevel := make(map[string]struct{})
 	skipNextLevel := make(map[string][]string)
 
-	for _, skip := range skips {
+	for _, skip := range g.skips {
 		idx := strings.IndexByte(skip, '>')
 		if idx == -1 {
 			skipMyLevel[skip] = struct{}{}
@@ -589,7 +633,11 @@ func genStruct(v reflect.Value, useMap bool, skips ...string) (mergeF, error) {
 		case reflect.Complex128:
 			c128s = append(c128s, sf.Offset)
 		default:
-			f, err := gen(v.Field(i), useMap, skipNextLevel[sf.Name]...)
+			f, err := (&generator{
+				structFs: g.structFs,
+				useMap:   g.useMap,
+				skips:    skipNextLevel[sf.Name],
+			}).gen(v.Field(i))
 			delete(skipNextLevel, sf.Name)
 			if err != nil {
 				return nil, err

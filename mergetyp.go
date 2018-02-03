@@ -11,7 +11,11 @@
 //
 // Using Gen can help future proof merging changes when the struct may grow
 // over time. Further, the field blacklisting functionality can eliminate
-// batches of annoying code.
+// batches of tedious code.
+//
+// Recursive types are supported, as is skipping fields selectively in
+// recursive types until a base limit. It is not yet possible to skip a field
+// forever while recursing.
 package mergetyp
 
 import (
@@ -136,7 +140,11 @@ func Gen(i interface{}, options ...func(*Config) error) (func(l, r interface{}),
 		return nil, errors.New("merge functions can only be generated for single-pointer-indirection types")
 	}
 
-	f, err := gen(v, c.unsafeMap, c.skips...)
+	f, err := (&generator{
+		structFs: make(map[string]*mergeF),
+		useMap:   c.unsafeMap,
+		skips:    c.skips,
+	}).gen(v)
 	if err != nil {
 		return nil, err
 	}
